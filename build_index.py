@@ -1,5 +1,5 @@
 """
-02_build_index.py
+build_index.py
  
 WHAT THIS SCRIPT DOES:
 Loads the chunks.json file from step 1, converts each chunk of text into
@@ -31,7 +31,7 @@ from sentence_transformers import SentenceTransformer
 
 CHUNKS_FILE = "chunks.json"
 INDEX_FILE = "index.faiss"
-META_FILE = "chunks.meta.json" # keeps the text/source tied to each vector
+META_FILE = "chunks_meta.json" # keeps the text/source tied to each vector
 
 # small, fasdt, well-regarded embedding model. Turns text into 384-dimensional vectors.
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"

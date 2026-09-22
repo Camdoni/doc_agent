@@ -1,5 +1,5 @@
 """
-01_chunk_docs.py
+chunk_docs.py
  
 WHAT THIS SCRIPT DOES:
 Reads every .txt or .md file in a folder, splits each one into small
