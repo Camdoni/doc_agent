@@ -2,7 +2,7 @@
 build_index.py
  
 WHAT THIS SCRIPT DOES:
-Loads the chunks.json file from step 1, converts each chunk of text into
+Loads the chunks.json file from chunk_docs.py, converts each chunk of text into
 a vector (an "embedding"), and stores all those vectors in a FAISS index
 so we can search them later by meaning instead of exact keyword match.
  
