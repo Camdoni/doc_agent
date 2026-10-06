@@ -2,4 +2,5 @@ docs/
 venv/
 
 *.json
+*.json1
 *.faiss

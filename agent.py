@@ -33,7 +33,7 @@ TOP_K = 3
 DISTANCE_THRESHOLD = 1.5
 
 # LLM config
-OLLAMA_CHAT_URL = "http://localhost:11434/api.chat"
+OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "llama3.2"
 
 # agent config
@@ -117,6 +117,8 @@ def call_llm(messages):
             "options": {"temperature": 0.2},
         },
     )
+    response.raise_for_status()
+    return response.json()["message"]
 
 def run_agent(question, index, chunks, embed_model):
     """
