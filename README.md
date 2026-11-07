@@ -3,12 +3,25 @@ A RAG agent over your own notes
 
 Ask questions about your Obsidian (or any markdown) notes from the terminal. Answers come only from your notes, with the sources shown. Everything runs on your own computer. No GPU needed.
 
-## Setup
-1. Install [Ollama](https://ollama.com/download) (it runs the AI model locally).
-2. Install docagent: `pip install .` (from this folder)
-3. Run `docagent`
+## Quick start
 
-The first run asks where your notes are and remembers it. If Ollama isn't running, docagent starts it. If the model isn't downloaded, docagent offers to download it.
+**Windows:** open PowerShell and paste this one line. It installs anything that's missing (Python, Ollama, docagent):
+```
+irm https://raw.githubusercontent.com/Camdoni/doc_agent/main/install.ps1 | iex
+```
+Then open a new PowerShell and type `docagent`. (Want to read the script first? It's `install.ps1` in this repo.)
+
+**Mac or Linux:** install [Python 3.10+](https://www.python.org/downloads/) and [Ollama](https://ollama.com/download), then:
+```
+pip install pipx
+pipx ensurepath
+pipx install https://github.com/Camdoni/doc_agent/archive/refs/heads/main.zip
+docagent
+```
+
+The first run asks where your notes are and remembers it. If Ollama isn't running, docagent starts it. If the model isn't downloaded, docagent offers to download it (about 2 GB). Without a GPU, answers take a few seconds to a minute depending on your computer.
+
+**Developing docagent?** From a clone: `pip install -e .`
 
 ## Using it
 Ask questions in plain English. Follow-up questions work. Edit a note in Obsidian and it is searchable a few seconds later.
