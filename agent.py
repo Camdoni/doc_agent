@@ -18,19 +18,19 @@ Every run is saved to agent_log.jsonl (one JSON object per line). Later
 we can turn good entries into fine-tuning data for the LoRA step.
 """
 
+import os
 import json
+import argparse
 import datetime
 import requests
 import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
 
-from ingest import ensure_index, DEFAULT_VAULT
+from config import resolve_vault, data_dir_for
+from ingest import ensure_index, INDEX_FILE, META_FILE, EMBEDDING_MODEL_NAME
 
 # retrieval config
-INDEX_FILE = "index.faiss"
-META_FILE = "chunks_meta.json"
-EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 TOP_K = 3
 DISTANCE_THRESHOLD = 1.5
 
@@ -40,7 +40,7 @@ DEFAULT_MODEL = "llama3.2"
 
 # agent config
 MAX_STEPS = 4 # safety limit so the loop can never run forever
-LOG_FILE = "agent_log.jsonl"
+LOG_FILE = "agent_log.jsonl"  # lives in the data folder, next to the index
 
 SYSTEM_PROMPT = """You are an assistant that answers questions about the user's lecture notes.
  
@@ -76,10 +76,10 @@ TOOLS = [
     }
 ]
 
-def load_resources():
+def load_resources(data_dir):
     """Loads the FAISS index, chunk metadata, and embedding model once at startup."""
-    index = faiss.read_index(INDEX_FILE)
-    with open(META_FILE, "r", encoding="utf-8") as f:
+    index = faiss.read_index(os.path.join(data_dir, INDEX_FILE))
+    with open(os.path.join(data_dir, META_FILE), "r", encoding="utf-8") as f:
         chunks = json.load(f)
     embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
     return index, chunks, embed_model
@@ -165,7 +165,7 @@ def run_agent(question, index, chunks, embed_model, model):
     # if we get here, the model kept calling tools and never answered.
     return "I could not finish answering that. Try rephrasing the question.", tool_log
 
-def write_log(question, answer, tool_log):
+def write_log(data_dir, question, answer, tool_log):
     """Appends one line of JSON to the log file for this run."""
     entry = {
         "time": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -174,17 +174,28 @@ def write_log(question, answer, tool_log):
         "tool_calls": tool_log,
     }
 
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
+    with open(os.path.join(data_dir, LOG_FILE), "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
 
-def choose_model():
-    """Lists installed models. Pressing Enter picks the default."""
+def choose_model(preferred=None):
+    """
+    Lists installed models. Pressing Enter picks the default.
+    If `preferred` is given (from --model), skips the menu and uses it.
+    """
     try:
         response = requests.get("http://localhost:11434/api/tags")
         response.raise_for_status()
     except requests.exceptions.ConnectionError:
         raise SystemExit("Couldn't reach Ollama. Make sure it is running, then try again.")
     models = [m["name"] for m in response.json()["models"]]
+    if not models:
+        raise SystemExit("Ollama has no models installed. Try: ollama pull llama3.2")
+
+    if preferred:
+        for name in models:
+            if name == preferred or name.startswith(preferred):
+                return name
+        raise SystemExit(f"Model '{preferred}' is not installed. Installed: {', '.join(models)}")
 
     for i, name in enumerate(models, start=1):
         print(f"  {i}. {name}")
@@ -205,10 +216,18 @@ def choose_model():
             if name.startswith(DEFAULT_MODEL):
                 return name
         return models[0]
+
 def main():
-    ensure_index(DEFAULT_VAULT)
-    index, chunks, embed_model = load_resources()
-    model = choose_model()
+    parser = argparse.ArgumentParser(prog="docagent", description="Ask questions about your notes.")
+    parser.add_argument("--notes", help="path to your notes folder (or set DOCAGENT_NOTES)")
+    parser.add_argument("--model", help="Ollama model to use, skips the picker (e.g. llama3.2)")
+    args = parser.parse_args()
+
+    vault = resolve_vault(args.notes)
+    data_dir = data_dir_for(vault)
+    ensure_index(vault, data_dir)
+    index, chunks, embed_model = load_resources(data_dir)
+    model = choose_model(args.model)
     print(f"Using {model}\n")
     print("Agent ready. Type a question (or 'quit' to exit).")
 
@@ -229,7 +248,7 @@ def main():
             print("  [no tool used]")
 
         print(f"\nAnswer: {answer}\n")
-        write_log(question, answer, tool_log)
+        write_log(data_dir, question, answer, tool_log)
 
 if __name__ == "__main__":
     main()

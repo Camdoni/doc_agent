@@ -8,14 +8,12 @@ and saves the FAISS index. It replaces running chunk_docs.py and then
 build_index.py by hand.
 
 USAGE:
-    python ingest.py                      # uses $DOCAGENT_NOTES, else ./docs
-    python ingest.py "C:/path/to/vault"   # explicit vault path
+    python ingest.py "C:/path/to/vault"   # or set DOCAGENT_NOTES and omit the path
 
-WHAT IT SAVES (same names agent.py already loads):
-    chunks.json        all chunks
-    chunks_meta.json   same chunks, row i here matches vector i in the index
+WHAT IT SAVES (into the data folder from config.py, not the vault):
+    chunks_meta.json   all chunks, row i here matches vector i in the index
     index.faiss        the vectors
-    manifest.json      {note path: last-modified time}, used later to detect edits
+    manifest.json      {note path: last-modified time}, used to detect edits
 """
 
 import os
@@ -28,9 +26,8 @@ import faiss
 from sentence_transformers import SentenceTransformer
 
 from chunk_docs import chunk_text  # your paragraph-packing chunker, reused as is
+from config import resolve_vault, data_dir_for
 
-DEFAULT_VAULT = os.environ.get("DOCAGENT_NOTES", "docs")
-CHUNKS_FILE = "chunks.json"
 INDEX_FILE = "index.faiss"
 META_FILE = "chunks_meta.json"
 MANIFEST_FILE = "manifest.json"
@@ -156,8 +153,8 @@ def build_index(chunks):
     return index
 
 
-def ingest(vault):
-    """Full rebuild: read notes -> chunk -> embed -> save everything."""
+def ingest(vault, data_dir):
+    """Full rebuild: read notes -> chunk -> embed -> save into data_dir."""
     if not os.path.isdir(vault):
         raise SystemExit(f"Notes folder not found: {vault}")
 
@@ -168,28 +165,28 @@ def ingest(vault):
 
     index = build_index(chunks)
 
-    faiss.write_index(index, INDEX_FILE)
-    for path in (CHUNKS_FILE, META_FILE):
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(chunks, f, indent=2)
-    with open(MANIFEST_FILE, "w", encoding="utf-8") as f:
+    faiss.write_index(index, os.path.join(data_dir, INDEX_FILE))
+    with open(os.path.join(data_dir, META_FILE), "w", encoding="utf-8") as f:
+        json.dump(chunks, f, indent=2)
+    with open(os.path.join(data_dir, MANIFEST_FILE), "w", encoding="utf-8") as f:
         json.dump({"vault": os.path.abspath(vault), "notes": manifest}, f, indent=2)
 
     print(f"\nIndexed {len(manifest)} notes into {len(chunks)} chunks.")
     return len(manifest), len(chunks)
 
 
-def vault_changes(vault):
+def vault_changes(vault, data_dir):
     """
     Compares the vault to the manifest saved by the last ingest.
     Returns a short reason string if a rebuild is needed, or None if the
     index is up to date. We compare modified times (cheap) instead of
     re-reading every note.
     """
-    if not all(os.path.exists(p) for p in (INDEX_FILE, META_FILE, MANIFEST_FILE)):
+    files = [os.path.join(data_dir, n) for n in (INDEX_FILE, META_FILE, MANIFEST_FILE)]
+    if not all(os.path.exists(p) for p in files):
         return "no index yet"
 
-    with open(MANIFEST_FILE, "r", encoding="utf-8") as f:
+    with open(os.path.join(data_dir, MANIFEST_FILE), "r", encoding="utf-8") as f:
         saved = json.load(f)
 
     if saved.get("vault") != os.path.abspath(vault):
@@ -205,15 +202,16 @@ def vault_changes(vault):
     return f"{len(added)} added, {len(edited)} edited, {len(removed)} removed"
 
 
-def ensure_index(vault):
+def ensure_index(vault, data_dir):
     """Called at startup: rebuilds the index only if the notes changed."""
-    reason = vault_changes(vault)
+    reason = vault_changes(vault, data_dir)
     if reason is None:
         return False
     print(f"Notes changed ({reason}). Rebuilding index...")
-    ingest(vault)
+    ingest(vault, data_dir)
     return True
 
 
 if __name__ == "__main__":
-    ingest(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_VAULT)
+    vault_path = resolve_vault(sys.argv[1] if len(sys.argv) > 1 else None)
+    ingest(vault_path, data_dir_for(vault_path))

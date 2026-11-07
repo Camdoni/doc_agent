@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "docagent"
+version = "0.1.0"
+description = "A terminal RAG agent over your own Obsidian notes"
+requires-python = ">=3.10"
+dependencies = [
+    "sentence-transformers>=2.7.0",
+    "faiss-cpu>=1.8.0",
+    "numpy>=1.26.0",
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+docagent = "agent:main"
+
+[tool.setuptools]
+py-modules = ["agent", "ingest", "chunk_docs", "config"]
