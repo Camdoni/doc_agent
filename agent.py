@@ -19,6 +19,7 @@ we can turn good entries into fine-tuning data for the LoRA step.
 """
 
 import os
+import re
 import time
 import json
 import argparse
@@ -52,7 +53,26 @@ The notes are short fragments and bullet points, not full sentences. Treat a fra
 "Node.js - runtime for async events" as a real answer and rewrite it into a clear sentence.
  
 Answer only from what search_docs returns. If it returns nothing relevant, say you could not
-find that in the notes. Keep answers to a few sentences."""
+find that in the notes. Keep answers to a few sentences.
+
+Earlier messages may be part of the same conversation. If the user asks a follow-up like
+"what about the second one?", call search_docs again with a complete query that makes sense on its own."""
+
+# Replies the code gives itself, so they never depend on the small model behaving.
+NOT_FOUND = "I couldn't find that in your notes."
+EMPTY_REPLY = "I'm not sure how to answer that. Try asking a question about your notes."
+SMALL_TALK = {
+    "hi": "Hi! Ask me anything about your notes.",
+    "hello": "Hello! What would you like to know from your notes?",
+    "hey": "Hey! Ask me a question about your notes.",
+    "good morning": "Good morning! What would you like to look up in your notes?",
+    "good evening": "Good evening! What would you like to look up in your notes?",
+    "thanks": "You're welcome! Ask me anything else about your notes.",
+    "thank you": "Happy to help. Ask me another question about your notes any time.",
+    "who are you": "I'm docagent. I answer questions using only your own notes.",
+    "what can you do": "I answer questions using your own notes. Ask about something you wrote down and I'll look it up.",
+}
+HISTORY_TURNS = 6  # how many past question/answer pairs the model sees for follow-ups
 
 # This is the description of the tool we hand to the model. The model never
 # sees our Python function. It only sees this description, so the name and
@@ -107,43 +127,88 @@ def search_docs(query, index, chunks, embed_model):
         return "No relevant passages found.", sources
     return "\n\n".join(parts), sources
 
-def call_llm(messages, model):
-    """Sends the convo so far to Ollama and returns the model's reply message."""
+def canned_reply(question):
+    """Returns a ready-made reply for greetings and thanks, else None. No model call needed."""
+    return SMALL_TALK.get(re.sub(r"[^a-z ]", "", question.lower()).strip())
+
+def call_llm(messages, model, on_token=None):
+    """
+    Sends the convo so far to Ollama and returns the model's reply message.
+    If `on_token` is given, the reply is streamed: Ollama sends it in small
+    pieces and we pass each piece to on_token as it arrives, so words appear
+    on screen while the model is still writing.
+    """
+    streaming = on_token is not None
     response = requests.post(
         OLLAMA_CHAT_URL,
         json={
             "model": model,
             "messages": messages,
             "tools": TOOLS,
-            "stream": False,
+            "stream": streaming,
             "options": {"temperature": 0.2},
         },
+        stream=streaming,
     )
     response.raise_for_status()
-    return response.json()["message"]
+    if not streaming:
+        return response.json()["message"]
 
-def run_agent(question, index, chunks, embed_model, model):
+    content = ""
+    tool_calls = []
+    started = False  # have we begun printing yet?
+    for line in response.iter_lines():
+        if not line:
+            continue
+        piece = json.loads(line).get("message", {})
+        tool_calls.extend(piece.get("tool_calls") or [])
+        token = piece.get("content", "")
+        if not token:
+            continue
+        content += token
+        if started:
+            on_token(token)
+        elif len(content.strip()) > 2:
+            # Hold back the first few characters. The model sometimes replies
+            # with just "{}", and we would rather print a real message than that.
+            on_token(content)
+            started = True
+    if not started and content.strip() not in ("", "{}"):
+        on_token(content)  # a very short but real answer, like "Yes."
+
+    reply = {"role": "assistant", "content": content}
+    if tool_calls:
+        reply["tool_calls"] = tool_calls
+    return reply
+
+def run_agent(question, index, chunks, embed_model, model, history=None, on_token=None):
     """
     The agent loop.
 
-    `messages` is the full conversation: system prompt, user question,
-    then each model reply and tool result as we go. The model has no memory of its own, so we resend this whole list on every call.
+    `messages` is the full conversation: system prompt, earlier turns (so
+    follow-up questions work), the new question, then each model reply and
+    tool result as we go. The model has no memory of its own, so we resend
+    this whole list on every call.
     """
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": question},
-    ]
+    small_talk = canned_reply(question)
+    if small_talk:
+        return small_talk, []
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages += history or []
+    messages.append({"role": "user", "content": question})
     tool_log = [] # what the agent did, saved to the log file
 
     for step in range(MAX_STEPS):
-        reply = call_llm(messages, model)
+        reply = call_llm(messages, model, on_token)
         messages.append(reply) # keep the model's reply in the history
 
         tool_calls = reply.get("tool_calls")
 
         # no tool call means the model is giving its final answer
         if not tool_calls:
-            return reply.get("content", ""), tool_log
+            answer = reply.get("content", "").strip()
+            return (answer if answer not in ("", "{}") else EMPTY_REPLY), tool_log
 
         # the model asked for one or more tool calls. run
         # each on and add the result to the history so the model
@@ -161,6 +226,11 @@ def run_agent(question, index, chunks, embed_model, model):
                 result = f"Unknown tool: {name}"
 
             messages.append({"role": "tool", "tool_name": name, "content": result})
+
+        # Nothing relevant was found in the notes. Say so ourselves instead of
+        # letting the model improvise an answer from its own knowledge.
+        if not any(call["sources"] for call in tool_log):
+            return NOT_FOUND, tool_log
 
     # if we get here, the model kept calling tools and never answered.
     return "I could not finish answering that. Try rephrasing the question.", tool_log
@@ -222,6 +292,7 @@ HELP_TEXT = """Commands:
   /model     pick a different Ollama model
   /reindex   rebuild the index from your notes now
   /sources   show the passages used for the last answer
+  /clear     forget the conversation and start fresh
   /quit      exit (or type quit)
 Anything else is treated as a question about your notes."""
 
@@ -273,6 +344,17 @@ def print_last_sources(tool_log):
     if not shown:
         print("No sources yet. Ask a question about your notes first.\n")
 
+class Streamer:
+    """Prints the model's answer piece by piece and remembers whether it printed anything."""
+    def __init__(self):
+        self.printed = False
+
+    def __call__(self, text):
+        if not self.printed:
+            print()  # blank line between the [tool] line and the answer
+        print(text, end="", flush=True)
+        self.printed = True
+
 def main():
     parser = argparse.ArgumentParser(prog="docagent", description="Ask questions about your notes.")
     parser.add_argument("--notes", help="path to your notes folder (or set DOCAGENT_NOTES)")
@@ -289,6 +371,7 @@ def main():
 
     print_banner(vault, data_dir, chunks, model)
     last_tool_log = []
+    history = []  # earlier questions and answers, so follow-ups like "and the second one?" work
 
     while True:
         try:
@@ -318,12 +401,16 @@ def main():
                 print()
             elif command == "sources":
                 print_last_sources(last_tool_log)
+            elif command == "clear":
+                history = []
+                print("Started a fresh conversation.\n")
             else:
                 print(f"Unknown command '{question}'. Type /help.\n")
             continue
 
+        streamer = Streamer()
         try:
-            answer, tool_log = run_agent(question, index, chunks, embed_model, model)
+            answer, tool_log = run_agent(question, index, chunks, embed_model, model, history, streamer)
         except requests.exceptions.ConnectionError:
             print("Couldn't reach Ollama. Make sure it is running.\n")
             continue
@@ -332,7 +419,11 @@ def main():
         if not tool_log:
             print("  [no tool used]")
 
-        print(f"\n{answer}\n")
+        # If the answer streamed in word by word it is already on screen.
+        # Replies the code wrote itself (greetings, "not found") print here.
+        print("\n" if streamer.printed else f"\n{answer}\n")
+        history += [{"role": "user", "content": question}, {"role": "assistant", "content": answer}]
+        history = history[-2 * HISTORY_TURNS:]
         line = sources_line(tool_log)
         if line:
             print(f"{line}\n")
