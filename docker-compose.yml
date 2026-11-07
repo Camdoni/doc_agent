@@ -1,0 +1,36 @@
+# Run docagent together with its own Ollama, no installs on your computer:
+#
+#   NOTES_DIR=/path/to/your/notes docker compose run --rm docagent
+#
+# The first run downloads the AI model (about 2 GB) into a Docker volume.
+# After that it starts right away.
+
+services:
+  ollama:
+    image: ollama/ollama
+    volumes:
+      - ollama-models:/root/.ollama
+    # Have an NVIDIA GPU? Uncomment these lines to use it. Everything works without it.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  docagent:
+    build: .
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    volumes:
+      - ${NOTES_DIR:-./notes}:/notes:ro   # read-only: docagent never changes your notes
+      - docagent-data:/data
+    stdin_open: true
+    tty: true
+
+volumes:
+  ollama-models:
+  docagent-data:

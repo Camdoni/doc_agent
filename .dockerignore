@@ -1,0 +1,10 @@
+venv/
+venv-train/
+.git/
+docs/
+__pycache__/
+*.egg-info/
+*.faiss
+*.json
+*.jsonl
+*.npz
