@@ -7,8 +7,8 @@ WORKDIR /app
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
 COPY pyproject.toml README.md ./
-COPY agent.py config.py ingest.py chunk_docs.py ollama_setup.py watcher.py ./
-RUN pip install --no-cache-dir .
+COPY agent.py cli.py client.py config.py ingest.py chunk_docs.py ollama_setup.py server.py watcher.py ./
+RUN pip install --no-cache-dir ".[server]"
 
 # Bake the embedding model into the image so the first run needs no download.
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"

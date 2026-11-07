@@ -91,11 +91,13 @@ def pull_model(name):
         raise SystemExit(f"Couldn't download '{name}'. Check the model name and your internet connection.")
 
 
-def ensure_ollama(wanted=None, default="llama3.2"):
+def ensure_ollama(wanted=None, default="llama3.2", auto_pull=False):
     """
     Call once at startup. Returns the list of installed models, or exits with
     a plain-English message explaining the single next step.
     `wanted` is the model asked for with --model, if any.
+    `auto_pull` downloads a missing model without asking, for servers that
+    have no keyboard to answer with.
     """
     try:
         models = installed_models()
@@ -115,7 +117,7 @@ def ensure_ollama(wanted=None, default="llama3.2"):
     if has_it:
         return models
 
-    if ask_yes(f"The model '{name}' isn't downloaded yet. Download it now?"):
+    if auto_pull or ask_yes(f"The model '{name}' isn't downloaded yet. Download it now?"):
         pull_model(name)
         return installed_models()
     raise SystemExit(f"No problem. Download it later with:  ollama pull {name}")

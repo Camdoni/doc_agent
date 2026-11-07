@@ -4,6 +4,10 @@
 #
 # The first run downloads the AI model (about 2 GB) into a Docker volume.
 # After that it starts right away.
+#
+# To run it as a server other programs can call instead (needs a secret key):
+#
+#   DOCAGENT_API_KEY=pick-a-secret NOTES_DIR=/path/to/notes docker compose --profile server up server
 
 services:
   ollama:
@@ -30,6 +34,21 @@ services:
       - docagent-data:/data
     stdin_open: true
     tty: true
+
+  server:
+    build: .
+    profiles: ["server"]   # only starts when you ask for it with --profile server
+    depends_on:
+      - ollama
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      DOCAGENT_API_KEY: ${DOCAGENT_API_KEY:?set DOCAGENT_API_KEY to a secret of your choice}
+    ports:
+      - "127.0.0.1:8000:8000"   # reachable from this computer only; change to 8000:8000 to share on your network
+    volumes:
+      - ${NOTES_DIR:-./notes}:/notes:ro
+      - docagent-data:/data
 
 volumes:
   ollama-models:

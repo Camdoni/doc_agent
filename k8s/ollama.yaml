@@ -1,0 +1,67 @@
+# Ollama, the program that runs the AI model. docagent talks to it over the network.
+#
+# A Deployment keeps one copy of the pod running and restarts it if it dies.
+# A Service gives it a stable name ("ollama") that other pods can use.
+# A PersistentVolumeClaim is a request for disk space that survives restarts,
+# so the 2 GB model is only downloaded once.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # the disk can only be attached to one pod at a time
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      containers:
+        - name: ollama
+          image: ollama/ollama
+          ports:
+            - containerPort: 11434
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+          readinessProbe:
+            httpGet:
+              path: /api/tags
+              port: 11434
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: 4Gi
+            # Have an NVIDIA GPU in the cluster? Uncomment to use it:
+            # limits:
+            #   nvidia.com/gpu: 1
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ollama-models
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+spec:
+  selector:
+    app: ollama
+  ports:
+    - port: 11434
+      targetPort: 11434

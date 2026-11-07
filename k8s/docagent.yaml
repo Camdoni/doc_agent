@@ -1,0 +1,121 @@
+# docagent in server mode. See the Kubernetes section of the README for the steps.
+#
+# Needs a Secret holding the API key. It is deliberately NOT in this file, so
+# no secret ever gets committed. Create it first with:
+#
+#   kubectl create secret generic docagent --from-literal=api-key=PICK-A-SECRET
+#
+# ConfigMap: settings that are not secret, kept out of the container image.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: docagent
+data:
+  OLLAMA_HOST: "http://ollama:11434"   # the Service from ollama.yaml
+  DOCAGENT_MODEL: "llama3.2"
+---
+# Disk for the notes. Copy your notes in with `kubectl cp`; docagent notices
+# them within a few seconds and indexes them.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: docagent-notes
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Disk for the search index, so a restart doesn't re-index everything.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: docagent-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docagent
+spec:
+  # One copy only. Conversations are remembered in the server's memory, and the
+  # index lives on a disk that one pod can use at a time.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: docagent
+  template:
+    metadata:
+      labels:
+        app: docagent
+    spec:
+      containers:
+        - name: docagent
+          image: docagent:latest
+          imagePullPolicy: IfNotPresent   # use the image you built locally with `docker build -t docagent .`
+          args: ["serve", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: docagent
+          env:
+            - name: DOCAGENT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: docagent
+                  key: api-key
+          volumeMounts:
+            - name: notes
+              mountPath: /notes
+            - name: data
+              mountPath: /data
+          # On the very first start docagent downloads the AI model (about 2 GB),
+          # so allow up to 20 minutes before Kubernetes gives up on it.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 120
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+          resources:
+            requests:
+              memory: 1Gi
+              cpu: 250m
+            limits:
+              memory: 3Gi
+      volumes:
+        - name: notes
+          persistentVolumeClaim:
+            claimName: docagent-notes
+        - name: data
+          persistentVolumeClaim:
+            claimName: docagent-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: docagent
+spec:
+  selector:
+    app: docagent
+  ports:
+    - port: 8000
+      targetPort: 8000

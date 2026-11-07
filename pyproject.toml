@@ -24,8 +24,13 @@ train = [
     "accelerate>=1.0",
 ]
 
+server = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
 [project.scripts]
-docagent = "agent:main"
+docagent = "cli:main"
 
 [tool.setuptools]
-py-modules = ["agent", "ingest", "chunk_docs", "config", "ollama_setup", "watcher"]
+py-modules = ["agent", "ingest", "chunk_docs", "config", "ollama_setup", "watcher", "cli", "server", "client"]

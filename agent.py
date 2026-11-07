@@ -22,7 +22,6 @@ import os
 import re
 import time
 import json
-import argparse
 import datetime
 import requests
 import numpy as np
@@ -182,7 +181,7 @@ def call_llm(messages, model, on_token=None):
         reply["tool_calls"] = tool_calls
     return reply
 
-def run_agent(question, index, chunks, embed_model, model, history=None, on_token=None):
+def run_agent(question, index, chunks, embed_model, model, history=None, on_token=None, on_tool=None):
     """
     The agent loop.
 
@@ -220,7 +219,10 @@ def run_agent(question, index, chunks, embed_model, model, history=None, on_toke
 
             if name == "search_docs":
                 search_query = args.get("query", question)
-                print(f"  [tool] search_docs(query={search_query!r})")
+                if on_tool:
+                    on_tool(search_query)  # a caller (the server) wants to report it its own way
+                else:
+                    print(f"  [tool] search_docs(query={search_query!r})")
                 result, sources = search_docs(search_query, index, chunks, embed_model)
                 tool_log.append({"tool": name, "query": search_query, "sources": sources})
             else:
@@ -356,19 +358,15 @@ class Streamer:
         print(text, end="", flush=True)
         self.printed = True
 
-def main():
-    parser = argparse.ArgumentParser(prog="docagent", description="Ask questions about your notes.")
-    parser.add_argument("--notes", help="path to your notes folder (or set DOCAGENT_NOTES)")
-    parser.add_argument("--model", help="Ollama model to use, skips the picker (e.g. llama3.2)")
-    args = parser.parse_args()
-
-    vault = resolve_vault(args.notes)
-    ensure_ollama(args.model, DEFAULT_MODEL)  # fail fast, before the slow indexing
+def run_chat(notes=None, model_name=None):
+    """The interactive chat in this terminal. cli.py calls this for plain `docagent`."""
+    vault = resolve_vault(notes)
+    ensure_ollama(model_name, DEFAULT_MODEL)  # fail fast, before the slow indexing
     data_dir = data_dir_for(vault)
     ensure_index(vault, data_dir)
     state = {"corpus": load_index(data_dir)}  # (index, chunks), swapped in one step when notes change
     embed_model = load_embedder()
-    model = choose_model(args.model)
+    model = choose_model(model_name)
 
     print_banner(vault, data_dir, state["corpus"][1], model)
 
@@ -439,4 +437,5 @@ def main():
         write_log(data_dir, question, answer, tool_log)
 
 if __name__ == "__main__":
+    from cli import main
     main()
