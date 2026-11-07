@@ -25,6 +25,8 @@ import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
 
+from ingest import ensure_index, DEFAULT_VAULT
+
 # retrieval config
 INDEX_FILE = "index.faiss"
 META_FILE = "chunks_meta.json"
@@ -99,7 +101,7 @@ def search_docs(query, index, chunks, embed_model):
             continue
         chunk = chunks[idx]
         parts.append(f"[{chunk['source']}]\n{chunk['text']}")
-        sources.append({"source": chunk["source"], "distance": float(dist)})
+        sources.append({"source": chunk["source"], "distance": float(dist), "text": chunk["text"]})
 
     if not parts:
         return "No relevant passages found.", sources
@@ -204,6 +206,7 @@ def choose_model():
                 return name
         return models[0]
 def main():
+    ensure_index(DEFAULT_VAULT)
     index, chunks, embed_model = load_resources()
     model = choose_model()
     print(f"Using {model}\n")
