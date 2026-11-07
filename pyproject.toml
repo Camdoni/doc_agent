@@ -28,4 +28,4 @@ train = [
 docagent = "agent:main"
 
 [tool.setuptools]
-py-modules = ["agent", "ingest", "chunk_docs", "config", "ollama_setup"]
+py-modules = ["agent", "ingest", "chunk_docs", "config", "ollama_setup", "watcher"]

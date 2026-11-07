@@ -30,7 +30,8 @@ import faiss
 
 from config import resolve_vault, data_dir_for
 from ollama_setup import ensure_ollama
-from ingest import ensure_index, ingest, load_embedder, INDEX_FILE, META_FILE, MANIFEST_FILE
+from ingest import ensure_index, load_embedder, INDEX_FILE, META_FILE, MANIFEST_FILE
+from watcher import NotesWatcher
 
 # retrieval config
 TOP_K = 3
@@ -365,11 +366,18 @@ def main():
     ensure_ollama(args.model, DEFAULT_MODEL)  # fail fast, before the slow indexing
     data_dir = data_dir_for(vault)
     ensure_index(vault, data_dir)
-    index, chunks = load_index(data_dir)
+    state = {"corpus": load_index(data_dir)}  # (index, chunks), swapped in one step when notes change
     embed_model = load_embedder()
     model = choose_model(args.model)
 
-    print_banner(vault, data_dir, chunks, model)
+    print_banner(vault, data_dir, state["corpus"][1], model)
+
+    def notes_updated(reason):
+        state["corpus"] = load_index(data_dir)
+        print(f"\n  [notes updated: {reason}. The new text is searchable now.]\n> ", end="", flush=True)
+
+    watcher = NotesWatcher(vault, data_dir, embed_model, notes_updated)
+    watcher.start()
     last_tool_log = []
     history = []  # earlier questions and answers, so follow-ups like "and the second one?" work
 
@@ -396,8 +404,8 @@ def main():
                 except SystemExit as e:  # e.g. Ollama not running; stay in the app
                     print(f"{e}\n")
             elif command == "reindex":
-                ingest(vault, data_dir)
-                index, chunks = load_index(data_dir)
+                watcher.rebuild(verbose=True)
+                state["corpus"] = load_index(data_dir)
                 print()
             elif command == "sources":
                 print_last_sources(last_tool_log)
@@ -409,6 +417,7 @@ def main():
             continue
 
         streamer = Streamer()
+        index, chunks = state["corpus"]
         try:
             answer, tool_log = run_agent(question, index, chunks, embed_model, model, history, streamer)
         except requests.exceptions.ConnectionError:

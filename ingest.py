@@ -20,6 +20,7 @@ import os
 import re
 import sys
 import json
+import hashlib
 
 import numpy as np
 import faiss
@@ -31,6 +32,7 @@ from config import resolve_vault, data_dir_for
 INDEX_FILE = "index.faiss"
 META_FILE = "chunks_meta.json"
 MANIFEST_FILE = "manifest.json"
+CACHE_FILE = "embed_cache.npz"
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"  # agent.py loads it through load_embedder()
 
 NOTE_EXTENSIONS = (".md", ".txt")
@@ -127,14 +129,19 @@ def chunk_note(rel_path, text):
     return chunks
 
 
-def build_chunks(vault):
+def scan_notes(vault):
+    """{note path: last-modified time} for every note in the vault right now."""
+    return {n: os.path.getmtime(os.path.join(vault, n)) for n in find_notes(vault)}
+
+
+def build_chunks(vault, verbose=True):
     """Reads and chunks every note. Returns (chunks, manifest)."""
     chunks = []
-    manifest = {}
-    for rel_path in find_notes(vault):
-        manifest[rel_path] = os.path.getmtime(os.path.join(vault, rel_path))
+    manifest = scan_notes(vault)
+    for rel_path in manifest:
         note_chunks = chunk_note(rel_path, read_note(vault, rel_path))
-        print(f"  {rel_path}: {len(note_chunks)} chunks")
+        if verbose:
+            print(f"  {rel_path}: {len(note_chunks)} chunks")
         chunks.extend(note_chunks)
     return chunks, manifest
 
@@ -152,31 +159,62 @@ def load_embedder():
         return SentenceTransformer(EMBEDDING_MODEL_NAME)
 
 
-def build_index(chunks):
+def embed_texts(texts, data_dir, embedder=None, verbose=True):
+    """
+    Turns texts into vectors, but only computes the ones it has not seen before.
+    Embedding is the slow part of indexing. Each vector is cached under a hash
+    of its text, so when you edit one note only that note's chunks are
+    re-embedded and everything else is reused from the cache file.
+    """
+    keys = [hashlib.sha1(f"{EMBEDDING_MODEL_NAME}\0{t}".encode("utf-8")).hexdigest() for t in texts]
+    cache_path = os.path.join(data_dir, CACHE_FILE)
+
+    cache = {}
+    if os.path.exists(cache_path):
+        try:
+            with np.load(cache_path) as saved:
+                cache = dict(zip(saved["keys"].tolist(), saved["vectors"]))
+        except Exception:  # a damaged cache just means we recompute
+            cache = {}
+
+    missing = [i for i, k in enumerate(keys) if k not in cache]
+    if missing:
+        model = embedder or load_embedder()
+        fresh = model.encode([texts[i] for i in missing], show_progress_bar=verbose and len(missing) > 50,
+                             normalize_embeddings=True)
+        for i, vector in zip(missing, fresh):
+            cache[keys[i]] = np.asarray(vector, dtype="float32")
+
+    vectors = np.array([cache[k] for k in keys], dtype="float32")
+    np.savez(cache_path, keys=np.array(keys), vectors=vectors)  # keep only what is still in use
+    if verbose:
+        print(f"Embedded {len(missing)} new chunks, reused {len(keys) - len(missing)} from the cache.")
+    return vectors
+
+
+def build_index(chunks, data_dir, embedder=None, verbose=True):
     """
     Embeds every chunk and returns a FAISS index. Row i of the index is
     chunks[i], so the order of `chunks` must never change after this.
     """
-    model = load_embedder()
-    texts = [c["text"] for c in chunks]
-    vectors = model.encode(texts, show_progress_bar=True, normalize_embeddings=True)
-    vectors = np.array(vectors, dtype="float32")
+    vectors = embed_texts([c["text"] for c in chunks], data_dir, embedder, verbose)
     index = faiss.IndexFlatL2(vectors.shape[1])
     index.add(vectors)
     return index
 
 
-def ingest(vault, data_dir):
+def ingest(vault, data_dir, embedder=None, verbose=True):
     """Full rebuild: read notes -> chunk -> embed -> save into data_dir."""
     if not os.path.isdir(vault):
         raise SystemExit(f"Notes folder not found: {vault}")
 
-    print(f"Reading notes from '{vault}'")
-    chunks, manifest = build_chunks(vault)
+    if verbose:
+        print(f"Reading notes from '{vault}'")
+    chunks, manifest = build_chunks(vault, verbose)
     if not chunks:
         raise SystemExit("No notes with text found. Nothing to index.")
 
-    index = build_index(chunks)
+    index = build_index(chunks, data_dir, embedder, verbose)
 
     faiss.write_index(index, os.path.join(data_dir, INDEX_FILE))
     with open(os.path.join(data_dir, META_FILE), "w", encoding="utf-8") as f:
@@ -184,7 +222,8 @@ def ingest(vault, data_dir):
     with open(os.path.join(data_dir, MANIFEST_FILE), "w", encoding="utf-8") as f:
         json.dump({"vault": os.path.abspath(vault), "notes": manifest}, f, indent=2)
 
-    print(f"\nIndexed {len(manifest)} notes into {len(chunks)} chunks.")
+    if verbose:
+        print(f"\nIndexed {len(manifest)} notes into {len(chunks)} chunks.")
     return len(manifest), len(chunks)
 
 
@@ -206,7 +245,7 @@ def vault_changes(vault, data_dir):
         return "notes folder changed"
 
     old = saved["notes"]
-    new = {n: os.path.getmtime(os.path.join(vault, n)) for n in find_notes(vault)}
+    new = scan_notes(vault)
     added = [n for n in new if n not in old]
     removed = [n for n in old if n not in new]
     edited = [n for n in new if n in old and new[n] != old[n]]
