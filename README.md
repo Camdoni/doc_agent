@@ -38,7 +38,7 @@ kubectl create secret generic docagent --from-literal=api-key=PICK-A-SECRET
 kubectl apply -f k8s/
 kubectl port-forward service/docagent 8000:8000
 ```
-Copy your notes in with `kubectl cp ./my-notes <docagent-pod>:/notes/`. docagent notices them within seconds. The first start downloads the AI model, which takes a few minutes. With minikube, run `minikube image load docagent:latest` after building.
+Copy your notes in with `kubectl cp my-notes/. <docagent-pod>:/notes/` (find the pod name with `kubectl get pods`). docagent notices them within seconds. On Windows use a relative path like this one, because `kubectl cp` mistakes `C:` for a pod name. The first start downloads the AI model, which takes a few minutes. With minikube, run `minikube image load docagent:latest` after building.
 
 ## Optional: fine-tune on your notes (needs an NVIDIA GPU)
 `make_dataset.py` builds training data from your notes. This is optional and the app works fully without it.
