@@ -254,13 +254,13 @@ def vault_changes(vault, data_dir):
     return f"{len(added)} added, {len(edited)} edited, {len(removed)} removed"
 
 
-def ensure_index(vault, data_dir):
-    """Called at startup: rebuilds the index only if the notes changed."""
+def ensure_index(vault, data_dir, embedder=None):
+    """Called at startup and when switching notes: rebuilds the index only if the notes changed."""
     reason = vault_changes(vault, data_dir)
     if reason is None:
         return False
     print(f"Notes changed ({reason}). Rebuilding index...")
-    ingest(vault, data_dir)
+    ingest(vault, data_dir, embedder)
     return True
 
 

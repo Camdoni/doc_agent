@@ -26,7 +26,7 @@ The first run asks where your notes are and remembers it. If Ollama isn't runnin
 ## Using it
 Ask questions in plain English. Follow-up questions work. Edit a note in Obsidian and it is searchable a few seconds later.
 
-Commands: `/help`, `/model`, `/reindex`, `/sources`, `/clear`, `/quit`.
+Commands: `/help`, `/change` (switch to another notes folder), `/model`, `/reindex`, `/sources`, `/clear`, `/quit`.
 
 ## With Docker (nothing to install except Docker)
 ```

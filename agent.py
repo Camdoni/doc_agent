@@ -27,7 +27,7 @@ import requests
 import numpy as np
 import faiss
 
-from config import resolve_vault, data_dir_for, OLLAMA_URL
+from config import resolve_vault, data_dir_for, clean_path, load_settings, save_settings, OLLAMA_URL
 from ollama_setup import ensure_ollama
 from ingest import ensure_index, load_embedder, INDEX_FILE, META_FILE, MANIFEST_FILE
 from watcher import NotesWatcher
@@ -293,6 +293,7 @@ def choose_model(preferred=None):
 HELP_TEXT = """Commands:
   /help      show this list
   /model     pick a different Ollama model
+  /change    switch to a different notes folder (/change or /change PATH)
   /reindex   rebuild the index from your notes now
   /sources   show the passages used for the last answer
   /clear     forget the conversation and start fresh
@@ -347,6 +348,23 @@ def print_last_sources(tool_log):
     if not shown:
         print("No sources yet. Ask a question about your notes first.\n")
 
+def switch_notes(raw_path, embed_model):
+    """
+    Checks a new notes folder and builds (or refreshes) its index.
+    Returns (vault, data_dir) on success, or None after printing why not.
+    """
+    new_vault = clean_path(raw_path)
+    if not os.path.isdir(new_vault):
+        print(f"I can't find a folder at '{raw_path}'. Check the path and try again.\n")
+        return None
+    new_data_dir = data_dir_for(new_vault)
+    try:
+        ensure_index(new_vault, new_data_dir, embed_model)
+    except SystemExit as e:  # e.g. the folder has no notes in it
+        print(f"{e}\n")
+        return None
+    return new_vault, new_data_dir
+
 class Streamer:
     """Prints the model's answer piece by piece and remembers whether it printed anything."""
     def __init__(self):
@@ -390,7 +408,9 @@ def run_chat(notes=None, model_name=None):
 
         # lines starting with "/" are app commands, not questions for the model
         if question.startswith("/") or question.lower() in ("quit", "exit"):
-            command = question.lower().lstrip("/")
+            # split "/change C:\My Notes" into the command and its argument, keeping the path's capital letters
+            name, _, argument = question.lstrip("/").partition(" ")
+            command, argument = name.lower(), argument.strip()
             if command in ("quit", "exit"):
                 break
             elif command == "help":
@@ -410,6 +430,23 @@ def run_chat(notes=None, model_name=None):
             elif command == "clear":
                 history = []
                 print("Started a fresh conversation.\n")
+            elif command == "change":
+                try:
+                    new_path = argument or input(f"New notes folder (now: {vault}): ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    new_path = ""
+                switched = switch_notes(new_path, embed_model) if new_path else None
+                if not new_path:
+                    print("No change. Still using your current notes.\n")
+                elif switched:
+                    watcher.stop()  # the old folder's watcher must not keep running
+                    vault, data_dir = switched
+                    state["corpus"] = load_index(data_dir)
+                    save_settings({**load_settings(), "notes": vault})  # next time, start here
+                    history, last_tool_log = [], []  # old conversation was about the old notes
+                    watcher = NotesWatcher(vault, data_dir, embed_model, notes_updated)
+                    watcher.start()
+                    print_banner(vault, data_dir, state["corpus"][1], model)
             else:
                 print(f"Unknown command '{question}'. Type /help.\n")
             continue

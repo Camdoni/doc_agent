@@ -50,6 +50,7 @@ class NotesWatcher(threading.Thread):
                     continue
                 self.rebuild()
                 last_seen = None
-                self.on_update(reason)
+                if not self._stop_event.is_set():  # stopped mid-rebuild (the user switched folders): stay quiet
+                    self.on_update(reason)
             except (Exception, SystemExit):
                 last_seen = None  # e.g. the notes folder is briefly unavailable; try again next round
