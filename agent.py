@@ -28,6 +28,7 @@ import numpy as np
 import faiss
 
 from config import resolve_vault, data_dir_for
+from ollama_setup import ensure_ollama
 from ingest import ensure_index, ingest, load_embedder, INDEX_FILE, META_FILE, MANIFEST_FILE
 
 # retrieval config
@@ -279,6 +280,7 @@ def main():
     args = parser.parse_args()
 
     vault = resolve_vault(args.notes)
+    ensure_ollama(args.model, DEFAULT_MODEL)  # fail fast, before the slow indexing
     data_dir = data_dir_for(vault)
     ensure_index(vault, data_dir)
     index, chunks = load_index(data_dir)
