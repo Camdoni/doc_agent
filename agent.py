@@ -19,16 +19,16 @@ we can turn good entries into fine-tuning data for the LoRA step.
 """
 
 import os
+import time
 import json
 import argparse
 import datetime
 import requests
 import numpy as np
 import faiss
-from sentence_transformers import SentenceTransformer
 
 from config import resolve_vault, data_dir_for
-from ingest import ensure_index, INDEX_FILE, META_FILE, EMBEDDING_MODEL_NAME
+from ingest import ensure_index, ingest, load_embedder, INDEX_FILE, META_FILE, MANIFEST_FILE
 
 # retrieval config
 TOP_K = 3
@@ -76,13 +76,12 @@ TOOLS = [
     }
 ]
 
-def load_resources(data_dir):
-    """Loads the FAISS index, chunk metadata, and embedding model once at startup."""
+def load_index(data_dir):
+    """Loads the FAISS index and chunk metadata. Cheap, so /reindex can call it again."""
     index = faiss.read_index(os.path.join(data_dir, INDEX_FILE))
     with open(os.path.join(data_dir, META_FILE), "r", encoding="utf-8") as f:
         chunks = json.load(f)
-    embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    return index, chunks, embed_model
+    return index, chunks
 
 def search_docs(query, index, chunks, embed_model):
     """
@@ -217,6 +216,62 @@ def choose_model(preferred=None):
                 return name
         return models[0]
 
+HELP_TEXT = """Commands:
+  /help      show this list
+  /model     pick a different Ollama model
+  /reindex   rebuild the index from your notes now
+  /sources   show the passages used for the last answer
+  /quit      exit (or type quit)
+Anything else is treated as a question about your notes."""
+
+def index_age(data_dir):
+    """Human-readable time since the index was last built, e.g. '3 h ago'."""
+    seconds = time.time() - os.path.getmtime(os.path.join(data_dir, MANIFEST_FILE))
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)} h ago"
+    return f"{int(seconds // 86400)} d ago"
+
+def print_banner(vault, data_dir, chunks, model):
+    """The header you see when the app starts: what it is reading and what is answering."""
+    notes = len({c["source"] for c in chunks})
+    print()
+    print(f"  docagent  -  notes: {vault}")
+    print(f"  {notes} notes, {len(chunks)} chunks, indexed {index_age(data_dir)}")
+    print(f"  model: {model} (Ollama, runs locally; your notes stay on this machine)")
+    print("  /help for commands, /quit to exit")
+    print()
+
+def unique_sources(tool_log):
+    """Collapses every search in one answer into {note path: closest distance}."""
+    best = {}
+    for call in tool_log:
+        for s in call["sources"]:
+            best[s["source"]] = min(s["distance"], best.get(s["source"], s["distance"]))
+    return dict(sorted(best.items(), key=lambda item: item[1]))
+
+def sources_line(tool_log):
+    """One line listing which notes the answer came from. Empty if no search ran."""
+    best = unique_sources(tool_log)
+    if not best:
+        return ""
+    return "Sources: " + ", ".join(f"{name} ({dist:.2f})" for name, dist in best.items())
+
+def print_last_sources(tool_log):
+    """/sources: show the actual passages the model was given for the last answer."""
+    shown = False
+    for call in tool_log:
+        for s in call["sources"]:
+            shown = True
+            snippet = s["text"].replace("\n", " ")
+            snippet = snippet if len(snippet) <= 240 else snippet[:240] + "..."
+            print(f"  {s['source']} (distance {s['distance']:.2f})\n    {snippet}\n")
+    if not shown:
+        print("No sources yet. Ask a question about your notes first.\n")
+
 def main():
     parser = argparse.ArgumentParser(prog="docagent", description="Ask questions about your notes.")
     parser.add_argument("--notes", help="path to your notes folder (or set DOCAGENT_NOTES)")
@@ -226,16 +281,43 @@ def main():
     vault = resolve_vault(args.notes)
     data_dir = data_dir_for(vault)
     ensure_index(vault, data_dir)
-    index, chunks, embed_model = load_resources(data_dir)
+    index, chunks = load_index(data_dir)
+    embed_model = load_embedder()
     model = choose_model(args.model)
-    print(f"Using {model}\n")
-    print("Agent ready. Type a question (or 'quit' to exit).")
+
+    print_banner(vault, data_dir, chunks, model)
+    last_tool_log = []
 
     while True:
-        question = input("Question: ").strip()
-        if question.lower() in ("quit", "exit"):
+        try:
+            question = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
             break
         if not question:
+            continue
+
+        # lines starting with "/" are app commands, not questions for the model
+        if question.startswith("/") or question.lower() in ("quit", "exit"):
+            command = question.lower().lstrip("/")
+            if command in ("quit", "exit"):
+                break
+            elif command == "help":
+                print(HELP_TEXT + "\n")
+            elif command == "model":
+                try:
+                    model = choose_model()
+                    print(f"Now using {model}\n")
+                except SystemExit as e:  # e.g. Ollama not running; stay in the app
+                    print(f"{e}\n")
+            elif command == "reindex":
+                ingest(vault, data_dir)
+                index, chunks = load_index(data_dir)
+                print()
+            elif command == "sources":
+                print_last_sources(last_tool_log)
+            else:
+                print(f"Unknown command '{question}'. Type /help.\n")
             continue
 
         try:
@@ -244,10 +326,14 @@ def main():
             print("Couldn't reach Ollama. Make sure it is running.\n")
             continue
 
+        last_tool_log = tool_log
         if not tool_log:
             print("  [no tool used]")
 
-        print(f"\nAnswer: {answer}\n")
+        print(f"\n{answer}\n")
+        line = sources_line(tool_log)
+        if line:
+            print(f"{line}\n")
         write_log(data_dir, question, answer, tool_log)
 
 if __name__ == "__main__":

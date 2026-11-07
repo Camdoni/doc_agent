@@ -31,7 +31,7 @@ from config import resolve_vault, data_dir_for
 INDEX_FILE = "index.faiss"
 META_FILE = "chunks_meta.json"
 MANIFEST_FILE = "manifest.json"
-EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"  # must match agent.py
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"  # agent.py loads it through load_embedder()
 
 NOTE_EXTENSIONS = (".md", ".txt")
 
@@ -139,12 +139,25 @@ def build_chunks(vault):
     return chunks, manifest
 
 
+def load_embedder():
+    """
+    Loads the embedding model from the local cache. Only if it has never been
+    downloaded do we contact the Hugging Face Hub (first run only), which is
+    also what triggers the "unauthenticated requests" warning.
+    """
+    try:
+        return SentenceTransformer(EMBEDDING_MODEL_NAME, local_files_only=True)
+    except OSError:
+        print("Downloading the embedding model (first run only)...")
+        return SentenceTransformer(EMBEDDING_MODEL_NAME)
+
+
 def build_index(chunks):
     """
     Embeds every chunk and returns a FAISS index. Row i of the index is
     chunks[i], so the order of `chunks` must never change after this.
     """
-    model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    model = load_embedder()
     texts = [c["text"] for c in chunks]
     vectors = model.encode(texts, show_progress_bar=True, normalize_embeddings=True)
     vectors = np.array(vectors, dtype="float32")
