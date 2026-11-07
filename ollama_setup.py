@@ -11,13 +11,14 @@ ready before docagent starts, and fixes what it can by itself:
 
 import os
 import sys
+import json
 import time
 import shutil
 import subprocess
 
 import requests
 
-OLLAMA_URL = "http://localhost:11434"
+from config import OLLAMA_URL, OLLAMA_IS_REMOTE
 
 NOT_INSTALLED_MESSAGE = """Ollama isn't installed. It's the free program that runs the AI model on your own computer.
 Download it from https://ollama.com/download, install it, then run docagent again."""
@@ -61,11 +62,32 @@ def ask_yes(question):
 
 
 def pull_model(name):
-    """Downloads a model with Ollama's own progress bar."""
+    """
+    Downloads a model by asking Ollama's server to do it. Going through the
+    server (instead of the `ollama` command) means this also works when Ollama
+    runs somewhere else, like another Docker container.
+    """
     print(f"Downloading '{name}'. This can take a few minutes the first time...")
     try:
-        subprocess.run(["ollama", "pull", name], check=True)
-    except subprocess.CalledProcessError:
+        with requests.post(f"{OLLAMA_URL}/api/pull", json={"model": name, "stream": True},
+                           stream=True, timeout=None) as response:
+            response.raise_for_status()
+            status = ""
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                event = json.loads(line)
+                if "error" in event:
+                    raise SystemExit(f"Couldn't download '{name}': {event['error']}")
+                if event.get("status") != status:
+                    if status:
+                        print()  # finish the previous status line
+                    status = event.get("status", "")
+                total = event.get("total")
+                percent = f" {int(100 * event.get('completed', 0) / total)}%" if total else ""
+                print(f"\r  {status}{percent}   ", end="", flush=True)
+            print()
+    except requests.exceptions.RequestException:
         raise SystemExit(f"Couldn't download '{name}'. Check the model name and your internet connection.")
 
 
@@ -78,6 +100,9 @@ def ensure_ollama(wanted=None, default="llama3.2"):
     try:
         models = installed_models()
     except requests.exceptions.RequestException:
+        if OLLAMA_IS_REMOTE:
+            # OLLAMA_HOST was set on purpose, so starting a local Ollama would be the wrong fix
+            raise SystemExit(f"Couldn't reach Ollama at {OLLAMA_URL}. Make sure it is running and OLLAMA_HOST is correct.")
         if not shutil.which("ollama"):
             raise SystemExit(NOT_INSTALLED_MESSAGE)
         print("Ollama isn't running. Starting it...")

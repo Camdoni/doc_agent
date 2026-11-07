@@ -18,8 +18,29 @@ import sys
 import json
 import hashlib
 from pathlib import Path
+from urllib.parse import urlparse
 
 SETTINGS_FILE = "config.json"
+
+
+def ollama_url():
+    """
+    Where Ollama is listening. Honors the standard OLLAMA_HOST variable
+    (e.g. "ollama:11434" when Ollama runs in another Docker container),
+    otherwise the normal local address.
+    """
+    host = os.environ.get("OLLAMA_HOST", "").strip()
+    if not host:
+        return "http://localhost:11434"
+    if "://" not in host:
+        host = "http://" + host
+    if urlparse(host).port is None:
+        host += ":11434"
+    return host.replace("0.0.0.0", "localhost").rstrip("/")
+
+
+OLLAMA_URL = ollama_url()
+OLLAMA_IS_REMOTE = bool(os.environ.get("OLLAMA_HOST", "").strip())  # someone pointed us at a specific Ollama
 
 
 def base_dir():

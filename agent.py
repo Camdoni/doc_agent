@@ -28,7 +28,7 @@ import requests
 import numpy as np
 import faiss
 
-from config import resolve_vault, data_dir_for
+from config import resolve_vault, data_dir_for, OLLAMA_URL
 from ollama_setup import ensure_ollama
 from ingest import ensure_index, load_embedder, INDEX_FILE, META_FILE, MANIFEST_FILE
 from watcher import NotesWatcher
@@ -38,7 +38,7 @@ TOP_K = 3
 DISTANCE_THRESHOLD = 1.5
 
 # LLM config
-OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
+OLLAMA_CHAT_URL = f"{OLLAMA_URL}/api/chat"
 DEFAULT_MODEL = "llama3.2"
 
 # agent config
@@ -254,7 +254,7 @@ def choose_model(preferred=None):
     If `preferred` is given (from --model), skips the menu and uses it.
     """
     try:
-        response = requests.get("http://localhost:11434/api/tags")
+        response = requests.get(f"{OLLAMA_URL}/api/tags")
         response.raise_for_status()
     except requests.exceptions.ConnectionError:
         raise SystemExit("Couldn't reach Ollama. Make sure it is running, then try again.")
