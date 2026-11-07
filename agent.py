@@ -14,7 +14,7 @@ supports a list of messages with roles, and "tools" field where we describe the 
 llama3.2 supports this.
 
 LOGGING:
-Every run is saved to agent_log.json1 (one JSON object per line). Later
+Every run is saved to agent_log.jsonl (one JSON object per line). Later
 we can turn good entries into fine-tuning data for the LoRA step.
 """
 
@@ -34,11 +34,11 @@ DISTANCE_THRESHOLD = 1.5
 
 # LLM config
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
-OLLAMA_MODEL = "llama3.2"
+DEFAULT_MODEL = "llama3.2"
 
 # agent config
 MAX_STEPS = 4 # safety limit so the loop can never run forever
-LOG_FILE = "agent_log.json1"
+LOG_FILE = "agent_log.jsonl"
 
 SYSTEM_PROMPT = """You are an assistant that answers questions about the user's lecture notes.
  
@@ -105,12 +105,12 @@ def search_docs(query, index, chunks, embed_model):
         return "No relevant passages found.", sources
     return "\n\n".join(parts), sources
 
-def call_llm(messages):
+def call_llm(messages, model):
     """Sends the convo so far to Ollama and returns the model's reply message."""
     response = requests.post(
         OLLAMA_CHAT_URL,
         json={
-            "model": OLLAMA_MODEL,
+            "model": model,
             "messages": messages,
             "tools": TOOLS,
             "stream": False,
@@ -120,7 +120,7 @@ def call_llm(messages):
     response.raise_for_status()
     return response.json()["message"]
 
-def run_agent(question, index, chunks, embed_model):
+def run_agent(question, index, chunks, embed_model, model):
     """
     The agent loop.
 
@@ -134,7 +134,7 @@ def run_agent(question, index, chunks, embed_model):
     tool_log = [] # what the agent did, saved to the log file
 
     for step in range(MAX_STEPS):
-        reply = call_llm(messages)
+        reply = call_llm(messages, model)
         messages.append(reply) # keep the model's reply in the history
 
         tool_calls = reply.get("tool_calls")
@@ -175,8 +175,38 @@ def write_log(question, answer, tool_log):
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
 
+def choose_model():
+    """Lists installed models. Pressing Enter picks the default."""
+    try:
+        response = requests.get("http://localhost:11434/api/tags")
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        raise SystemExit("Couldn't reach Ollama. Make sure it is running, then try again.")
+    models = [m["name"] for m in response.json()["models"]]
+
+    for i, name in enumerate(models, start=1):
+        print(f"  {i}. {name}")
+
+    choice = input(f"Pick a model number (Enter for {DEFAULT_MODEL}): ").strip()
+
+    if not choice:
+        for name in models:
+            if name.startswith(DEFAULT_MODEL):
+                return name
+        return models[0]
+
+    try:
+        return models[int(choice) - 1]
+    except (ValueError, IndexError):
+        print(f"Invalid choice, using {DEFAULT_MODEL} instead.\n")
+        for name in models:
+            if name.startswith(DEFAULT_MODEL):
+                return name
+        return models[0]
 def main():
     index, chunks, embed_model = load_resources()
+    model = choose_model()
+    print(f"Using {model}\n")
     print("Agent ready. Type a question (or 'quit' to exit).")
 
     while True:
@@ -187,7 +217,7 @@ def main():
             continue
 
         try:
-            answer, tool_log = run_agent(question, index, chunks, embed_model)
+            answer, tool_log = run_agent(question, index, chunks, embed_model, model)
         except requests.exceptions.ConnectionError:
             print("Couldn't reach Ollama. Make sure it is running.\n")
             continue
